@@ -107,10 +107,17 @@ class ThermalClassifierService:
         feats = build_feature_frame(df, facilities=facilities or [])
         results = predict_with_abstention(self._bundle, feats)
 
+        from ml.features.site_features import SITE_FEATURE_COLUMNS
+
         for res, (_, row) in zip(results, feats.iterrows()):
             res["evidence"] = self._explain(row, res["predicted_class"])
             res["site_id"] = int(row.get("site_id", -1))
             res["persistence_ratio"] = float(row.get("persistence_ratio", 0.0) or 0.0)
+            res["features"] = {
+                col: (None if pd.isna(row.get(col)) else float(row.get(col)))
+                for col in SITE_FEATURE_COLUMNS
+                if col in row.index
+            }
 
         if target_index is not None:
             return [results[target_index]]

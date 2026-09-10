@@ -69,3 +69,5 @@ pgdata/
 ml/artifacts/
 data/processed/*.csv
 data/processed/*.parquet
+*.db
+.env

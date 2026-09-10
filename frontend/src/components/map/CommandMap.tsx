@@ -44,22 +44,25 @@ export function CommandMap({
         style: {
           version: 8,
           sources: {
-            carto: {
+            // OpenStreetMap standard tiles: no API key, no registration.
+            // CARTO's basemap CDN now watermarks "API KEY REQUIRED" across every
+            // tile when called without credentials, which rendered the whole map
+            // unusable. OSM is what MapView already uses, so both maps now match.
+            osm: {
               type: "raster",
-              tiles: [
-                "https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png",
-                "https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png",
-              ],
+              // No a./b./c. subdomains - OSM deprecated those and they no longer
+              // serve tiles reliably. This is the same URL MapView.tsx uses.
+              tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
               tileSize: 256,
               attribution:
-                '&copy; <a href="https://carto.com/">CARTO</a> &copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>',
+                '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
             },
           },
           layers: [
             {
-              id: "carto-tiles",
+              id: "osm-tiles",
               type: "raster",
-              source: "carto",
+              source: "osm",
               minzoom: 0,
               maxzoom: 19,
             },
@@ -118,7 +121,13 @@ export function CommandMap({
 
     const updateLayers = () => {
       if (!map.isStyleLoaded()) {
-        map.once("style.load", updateLayers);
+        // "idle", not "style.load". MapLibre GL emits load / styledata / idle;
+        // "style.load" is a Mapbox GL internal name that MapLibre never fires, so
+        // this listener was registered for an event that could not arrive and the
+        // hotspot layers were silently never added whenever the style had not
+        // finished loading by the time this effect first ran. "idle" fires after
+        // every render settle, so a later one always arrives.
+        map.once("idle", updateLayers);
         return;
       }
 

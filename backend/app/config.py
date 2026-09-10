@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     # ---- Application ----
     environment: str = "development"
     log_level: str = "INFO"
+    sql_echo: bool = False  # set SQL_ECHO=true to log every statement
     secret_key: str = "dev-secret-change-in-production"
 
     # ---- CORS ----

@@ -37,7 +37,7 @@ export function Header({ onMobileMenuToggle }: HeaderProps) {
         )}
         <div className="header__badge">
           <span className="pulse-dot pulse-dot--success" />
-          GOI • SIH 2024
+          GOI • SIH26162
         </div>
         <div>
           <div className="header__title">National Emergency Command Centre</div>
