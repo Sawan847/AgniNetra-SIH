@@ -155,51 +155,38 @@ class SatelliteFeatureService:
         acq_date: datetime.date,
         land_cover_class: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """Deterministic, physically grounded spectral estimate based on geography and land-cover."""
-        # Base seed on location to ensure deterministic feature extraction
-        seed = int(abs(lat * 1000 + lon * 100)) % (2**31 - 1)
-        rng = np.random.default_rng(seed)
+        """Report that no imagery is available. Never invent spectral values.
 
-        # Land cover classes (ESA WorldCover standard numeric codes):
-        # 10: Tree cover, 20: Shrubland, 30: Grassland, 40: Cropland, 50: Built-up, 60: Bare / sparse
-        lc = land_cover_class or 50
+        This function previously returned NDVI, NBR and dNBR drawn from land-cover
+        keyed random distributions, tagged imagery_available=True. Those numbers then
+        surfaced in the UI as "Sentinel-2 Delta-NBR" evidence on operational alerts,
+        and fed the classifier as though they were measurements.
 
-        if lc == 10:  # Forest / Tree cover
-            base_ndvi = float(rng.uniform(0.65, 0.85))
-            base_nbr = float(rng.uniform(0.50, 0.75))
-            base_ndmi = float(rng.uniform(0.30, 0.50))
-            delta_nbr = float(rng.uniform(0.25, 0.60))  # Significant burn delta in fire events
-        elif lc == 40:  # Cropland
-            doy = acq_date.timetuple().tm_yday
-            # Seasonal crop cycle
-            seasonal_factor = 0.5 + 0.3 * np.sin(2 * np.pi * doy / 365.0)
-            base_ndvi = float(np.clip(seasonal_factor + rng.normal(0, 0.05), 0.20, 0.75))
-            base_nbr = float(base_ndvi * 0.8)
-            base_ndmi = float(rng.uniform(0.10, 0.35))
-            delta_nbr = float(rng.uniform(0.10, 0.30))
-        elif lc == 50:  # Built-up / Industrial
-            base_ndvi = float(rng.uniform(0.08, 0.25))
-            base_nbr = float(rng.uniform(0.05, 0.20))
-            base_ndmi = float(rng.uniform(-0.10, 0.10))
-            delta_nbr = float(rng.uniform(0.0, 0.08))  # Minimal vegetated burn signature
-        elif lc == 60:  # Bare / Mining / Quarry
-            base_ndvi = float(rng.uniform(0.05, 0.18))
-            base_nbr = float(rng.uniform(0.02, 0.15))
-            base_ndmi = float(rng.uniform(-0.15, 0.05))
-            delta_nbr = float(rng.uniform(0.0, 0.05))
-        else:  # Shrub / Grassland
-            base_ndvi = float(rng.uniform(0.35, 0.55))
-            base_nbr = float(rng.uniform(0.25, 0.45))
-            base_ndmi = float(rng.uniform(0.10, 0.25))
-            delta_nbr = float(rng.uniform(0.15, 0.40))
+        A fabricated spectral index on a fire alert is worse than no index at all: it
+        cannot be distinguished from a real one by anything downstream, and it invites
+        an analyst to trust a burn-severity reading that never existed. When Earth
+        Engine is not configured, the correct answer is that we do not know.
 
+        Downstream consumers must check imagery_available before using these fields.
+        The feature pipeline in ml.features.site_features excludes spectral indices
+        entirely unless GEE is live, so an unconfigured deployment simply trains and
+        predicts without them.
+        """
+        logger.debug(
+            "No Earth Engine credentials - returning spectral features as unavailable "
+            "for (%.4f, %.4f)", lat, lon,
+        )
         return {
-            "ndvi_value": round(float(base_ndvi), 4),
-            "nbr_value": round(float(base_nbr), 4),
-            "ndmi_value": round(float(base_ndmi), 4),
-            "delta_nbr": round(float(delta_nbr), 4),
-            "cloud_cover_fraction": round(float(rng.uniform(0.0, 0.25)), 3),
-            "imagery_available": True,
-            "data_source": "SYNTHETIC_SPECTRAL_ESTIMATOR",
-            "imagery_timestamp": acq_date.isoformat(),
+            "ndvi_value": None,
+            "nbr_value": None,
+            "ndmi_value": None,
+            "delta_nbr": None,
+            "cloud_cover_fraction": None,
+            "imagery_available": False,
+            "data_source": "UNAVAILABLE_NO_GEE_CREDENTIALS",
+            "imagery_timestamp": None,
+            "reason": (
+                "Google Earth Engine is not configured. Set EE_PROJECT_ID and "
+                "service-account credentials to enable Sentinel-2 spectral features."
+            ),
         }

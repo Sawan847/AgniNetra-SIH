@@ -64,3 +64,8 @@ logs/
 
 # ===== PostgreSQL =====
 pgdata/
+
+.venv/
+ml/artifacts/
+data/processed/*.csv
+data/processed/*.parquet

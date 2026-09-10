@@ -1,4 +1,40 @@
-"""AgniNetra AI — Machine Learning Training & Model Comparison Pipeline.
+"""DEPRECATED - superseded by ml.training.train_pipeline.
+
+DO NOT USE FOR TRAINING. Retained only so older imports keep resolving.
+
+Why this was retired
+--------------------
+generate_synthetic_training_data() below produces the *feature vector* for each
+class from hand-written per-class distributions - dist_nearest_facility, frp,
+persistence_score and the rest are all drawn from ranges chosen to match the label.
+A classifier trained on that data learns to invert those if-statements, and the
+macro-F1 it reports measures how well scikit-learn can reverse-engineer the
+generator. It says nothing about real fires.
+
+Two further defects made it worse than merely uninformative:
+
+  * load_classifier_pipeline() trained on this synthetic data on first call when no
+    artifact existed - so a live API endpoint would fit a model to fiction and then
+    serve it in production.
+
+  * The generator sampled cluster_size, cluster_spread_km and cluster_direction_deg
+    randomly, while the inference path hardcoded them to 1.0/0.0/0.0. Three features
+    the model learned from were frozen constants in production.
+
+The replacement
+---------------
+ml.training.train_pipeline trains on detections that carry no label. Features come
+from observed behaviour and real OSM geometry; labels are derived independently by
+ml.labeling.weak_labels. Run it via:
+
+    python scripts/build_dataset.py --source sim      # offline
+    python scripts/build_dataset.py --source firms    # live NASA FIRMS
+
+Original docstring follows.
+
+---
+
+AgniNetra AI - Machine Learning Training & Model Comparison Pipeline.
 
 Features:
 - Geographic Group-based train/validation splitting (GroupKFold)
@@ -14,6 +50,7 @@ import datetime
 import json
 import logging
 import os
+import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import joblib
@@ -324,11 +361,25 @@ def run_model_comparison_and_training(
 def load_classifier_pipeline(
     artifact_path: str = "ml/artifacts/fire_classifier.joblib",
 ) -> TwoStageThermalClassifier:
-    """Load serialized two-stage model pipeline from disk, falling back to instant training if absent."""
+    """DEPRECATED. Use app.services.classifier.classifier_service instead.
+
+    This no longer trains on demand. Fitting a model inside a request handler - on
+    synthetic data, no less - meant a production endpoint silently served a
+    classifier fitted to fiction. Failing loudly is the correct behaviour.
+    """
+    warnings.warn(
+        "ml.training.train.load_classifier_pipeline is deprecated; use "
+        "app.services.classifier.classifier_service (backed by "
+        "ml.training.train_pipeline).",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     if os.path.exists(artifact_path):
         return joblib.load(artifact_path)
 
-    logger.warning("Artifact not found at %s. Initializing and training default pipeline.", artifact_path)
-    X, y, groups = generate_synthetic_training_data(n_samples=600, random_state=42)
-    res = run_model_comparison_and_training(X, y, groups, artifacts_dir=os.path.dirname(artifact_path) or "ml/artifacts")
-    return joblib.load(res["artifact_path"])
+    raise FileNotFoundError(
+        f"No model artifact at {artifact_path}, and on-demand training on synthetic "
+        "data has been removed. Build a real model first:\n"
+        "    python scripts/build_dataset.py --source sim\n"
+        "then load it via app.services.classifier.classifier_service."
+    )
