@@ -1,0 +1,66 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+*.egg
+dist/
+build/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# ===== Node =====
+node_modules/
+frontend/dist/
+frontend/build/
+*.tsbuildinfo
+
+# ===== Environment =====
+.env
+.env.local
+.env.production
+.env.*.local
+
+# ===== IDE =====
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+desktop.ini
+ehthumbs.db
+
+# ===== Docker =====
+docker-compose.override.yml
+
+# ===== Data =====
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# ===== ML Artifacts =====
+ml/artifacts/
+*.pkl
+*.joblib
+*.h5
+*.onnx
+
+# ===== Logs =====
+*.log
+logs/
+
+# ===== PostgreSQL =====
+pgdata/
