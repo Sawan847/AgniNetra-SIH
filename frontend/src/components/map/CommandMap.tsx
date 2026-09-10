@@ -94,7 +94,25 @@ export function CommandMap({
         });
       });
 
-      map.on("load", () => setMapEpoch((n) => n + 1));
+      // "styledata", not "load". The style here is a local JSON object, so it is
+      // ready almost immediately; "load" additionally waits for the raster basemap
+      // tiles to finish fetching. Gating on "load" means that when the tile server
+      // is slow or rate-limiting - OSM's public endpoint throttles heavy use - the
+      // detection layers are never attached and the map renders completely empty.
+      // The detections must not depend on the basemap.
+      // once, NOT on. "styledata" fires on every style mutation - including the ones
+      // this component itself causes by adding the hotspot layers. Subscribing with
+      // .on() creates a loop: add layers -> styledata -> bump epoch -> effect reruns
+      // -> add layers -> ... which thrashes the map instance until nothing renders
+      // at all, basemap included. One bump when the style first becomes ready is all
+      // this needs; the layer effect's own dependencies handle everything after.
+      map.once("styledata", () => setMapEpoch((n) => n + 1));
+
+      // Surface tile failures instead of leaving a blank rectangle unexplained.
+      map.on("error", (e) => {
+        const msg = (e && (e as { error?: Error }).error?.message) || String(e);
+        console.warn("MapLibre:", msg);
+      });
 
       mapRef.current = map;
     } catch (err) {
@@ -132,15 +150,31 @@ export function CommandMap({
       })),
     };
 
+    // Attaching the hotspot layers used to be driven by a MapLibre event, and three
+    // successive event choices all failed for different reasons:
+    //
+    //   "style.load"  a Mapbox GL internal name MapLibre never emits, so the
+    //                 listener waited for something that could not arrive;
+    //   "idle"        only fires once every pending tile request settles, so a slow
+    //                 or throttled basemap meant the layers never attached;
+    //   "styledata"   fires correctly, but the listener has to survive React
+    //                 StrictMode tearing down the first map and building a second,
+    //                 and a subscription registered on the discarded instance dies
+    //                 with it.
+    //
+    // The failure mode is always the same and always silent: a rendered basemap with
+    // no detections on it. Rather than find a fourth event, re-read the map's own
+    // readiness on a short bounded retry. It is self-cancelling, cannot be orphaned
+    // by an instance swap, and costs nothing after the first successful attach.
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let cancelled = false;
+
     const updateLayers = () => {
+      if (cancelled) return;
+      const live = mapRef.current;
+      if (!live || live !== map) return;   // a newer map instance owns the container
       if (!map.isStyleLoaded()) {
-        // "idle", not "style.load". MapLibre GL emits load / styledata / idle;
-        // "style.load" is a Mapbox GL internal name that MapLibre never fires, so
-        // this listener was registered for an event that could not arrive and the
-        // hotspot layers were silently never added whenever the style had not
-        // finished loading by the time this effect first ran. "idle" fires after
-        // every render settle, so a later one always arrives.
-        map.once("idle", updateLayers);
+        retry = setTimeout(updateLayers, 100);
         return;
       }
 
@@ -250,6 +284,11 @@ export function CommandMap({
     };
 
     updateLayers();
+
+    return () => {
+      cancelled = true;
+      if (retry) clearTimeout(retry);
+    };
   }, [hotspots, showHeatmap, showClusters, onSelectHotspot, mapEpoch]);
 
   // Center on selected hotspot if changed
