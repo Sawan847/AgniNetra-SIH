@@ -268,13 +268,43 @@ export interface ModelMetrics {
     macro_recall?: number;
     mean_spatial_cv_f1?: number;
     false_alert_rate_industrial_fire?: number;
-    confusion_matrix?: number[][];
+    confusion_matrix?: number[][] | { labels: string[]; matrix: number[][] };
     per_class_metrics?: Record<string, {
       precision: number;
       recall: number;
       f1: number;
       support: number;
     }>;
+
+    // Emitted by ml.training.train_pipeline's model card. These describe the model
+    // that is actually loaded, so the dashboard reports real figures instead of the
+    // hardcoded placeholders it used to fall back to.
+    abstain_rate?: number;
+    macro_f1_on_confident_subset?: number;
+    n_features?: number;
+    classes?: string[];
+    data_provenance?: string;
+    per_class?: Record<string, Record<string, number>>;
+    label_coverage?: {
+      coverage?: number;
+      labelled?: number;
+      total_detections?: number;
+      unlabelled_excluded?: number;
+      class_counts?: Record<string, number>;
+    };
+    feature_ablation?: {
+      spatial_cv_macro_f1_all_features?: number;
+      spatial_cv_macro_f1_ablated?: number;
+      delta?: number;
+      withheld_features?: string[];
+    };
+    holdout_class_coverage?: {
+      classes_in_holdout?: string[];
+      classes_missing_from_holdout?: string[];
+      warning?: string;
+    };
+    label_circularity_note?: string;
+    known_limitations?: string[];
   };
   feature_importances: Record<string, number>;
   model_card?: {

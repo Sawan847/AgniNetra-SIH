@@ -25,6 +25,37 @@ import {
   type PredictionRead,
 } from "../types";
 
+/** Distance at which the feature pipeline stops measuring (ml/features/site_features.py). */
+const MAX_DIST_KM = 50;
+
+/**
+ * Render a spectral index, or say plainly that it was not measured.
+ * Never substitute a placeholder number for an absent measurement.
+ */
+function fmtSpectral(value: unknown): React.ReactNode {
+  if (value === null || value === undefined || value === "") {
+    return <span className="text-muted">Not measured</span>;
+  }
+  return String(value);
+}
+
+/**
+ * Render a distance in metres, or note that nothing was found inside the search
+ * radius. Printing the capped value verbatim showed "50000 meters", which reads
+ * like a precise measurement rather than "nothing nearby".
+ */
+function fmtDistance(km: unknown): React.ReactNode {
+  if (km === null || km === undefined) {
+    return <span className="text-muted">Not computed</span>;
+  }
+  const n = Number(km);
+  if (!Number.isFinite(n)) return <span className="text-muted">Not computed</span>;
+  if (n >= MAX_DIST_KM) {
+    return <span className="text-muted">None within {MAX_DIST_KM} km</span>;
+  }
+  return `${(n * 1000).toFixed(0)} meters`;
+}
+
 export function InvestigationPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -425,9 +456,7 @@ export function InvestigationPage() {
                     <tr>
                       <td className="text-muted text-xs">Nearest Facility Proximity</td>
                       <td className="font-bold">
-                        {hotspot.features?.dist_nearest_facility !== undefined
-                          ? `${(Number(hotspot.features.dist_nearest_facility) * 1000).toFixed(0)} meters`
-                          : "Assessed via Overpass"}
+                        {fmtDistance(hotspot.features?.dist_nearest_facility)}
                       </td>
                     </tr>
                     <tr>
@@ -471,39 +500,50 @@ export function InvestigationPage() {
               <div className="table-container">
                 <table className="table">
                   <tbody>
+                    {/*
+                      Spectral values render only when Sentinel-2 imagery was actually
+                      retrieved. These previously fell back to hardcoded numbers
+                      (NDVI 0.32, NBR 0.24, dNBR 0.08...) under a heading that reads
+                      "Sentinel-2 SR Surface Reflectance", so an analyst saw invented
+                      burn-severity evidence on an operational alert and had no way to
+                      tell it from a real measurement. Unmeasured now reads as
+                      "Not measured".
+                    */}
                     <tr>
                       <td className="text-muted text-xs">Normalized Difference Vegetation (NDVI)</td>
-                      <td className="font-bold">{String(hotspot.features?.ndvi_value ?? "0.32")}</td>
+                      <td className="font-bold">{fmtSpectral(hotspot.features?.ndvi_value)}</td>
                     </tr>
                     <tr>
                       <td className="text-muted text-xs">Normalized Burn Ratio (NBR)</td>
-                      <td>{String(hotspot.features?.nbr_value ?? "0.24")}</td>
+                      <td>{fmtSpectral(hotspot.features?.nbr_value)}</td>
                     </tr>
                     <tr>
                       <td className="text-muted text-xs">Burn Index Drop (ΔNBR)</td>
                       <td className="font-bold text-danger">
-                        {String(hotspot.features?.delta_nbr ?? "0.08")}
+                        {fmtSpectral(hotspot.features?.delta_nbr)}
                       </td>
                     </tr>
                     <tr>
                       <td className="text-muted text-xs">Moisture Index (NDMI)</td>
-                      <td>{String(hotspot.features?.ndmi_value ?? "0.14")}</td>
+                      <td>{fmtSpectral(hotspot.features?.ndmi_value)}</td>
                     </tr>
                     <tr>
                       <td className="text-muted text-xs">ESA WorldCover Land Class</td>
-                      <td>{String(hotspot.features?.land_cover_class ?? "50 (Built-up)")}</td>
+                      <td>{fmtSpectral(hotspot.features?.land_cover_class)}</td>
                     </tr>
                     <tr>
                       <td className="text-muted text-xs">Cloud Cover Fraction</td>
-                      <td>{String(hotspot.features?.cloud_cover_fraction ?? "0.08")}</td>
+                      <td>{fmtSpectral(hotspot.features?.cloud_cover_fraction)}</td>
                     </tr>
                     <tr>
                       <td className="text-muted text-xs">Imagery Verification</td>
                       <td>
-                        {hotspot.features?.imagery_available !== false ? (
+                        {hotspot.features?.imagery_available === true ? (
                           <span className="badge badge--success">Calibrated Sentinel-2</span>
                         ) : (
-                          <span className="badge badge--warning">Offline Spectral Fallback</span>
+                          <span className="badge badge--warning">
+                            Not available — Earth Engine not configured
+                          </span>
                         )}
                       </td>
                     </tr>

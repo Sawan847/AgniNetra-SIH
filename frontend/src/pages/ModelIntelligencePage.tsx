@@ -11,7 +11,20 @@ import { Card, MetricCard, CardHeader } from "../components/common/Card";
 import { CardSkeleton } from "../components/common/Skeleton";
 import { useToast } from "../components/common/Toast";
 import { modelApi } from "../api/client";
-import type { ModelMetrics } from "../types";
+import { FIRE_CLASS_LABELS, type FireClass, type ModelMetrics } from "../types";
+
+/**
+ * Format a 0-1 metric as a percentage, or an em dash when it is genuinely absent.
+ * Never substitute an invented figure: these tiles previously fell back to
+ * hardcoded values (76.8%, 84.2%, 74.5%, 1.8%) that were displayed as the live
+ * model's measured performance.
+ */
+function pct(value: unknown, digits = 1): string {
+  if (value === null || value === undefined) return "—";
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "—";
+  return `${(n * 100).toFixed(digits)}%`;
+}
 
 export function ModelIntelligencePage() {
   const { addToast } = useToast();
@@ -50,23 +63,33 @@ export function ModelIntelligencePage() {
         }))
     : [];
 
-  const confusionMatrix = evalMetrics.confusion_matrix || [
-    [45, 3, 1, 0, 1, 0],
-    [2, 48, 0, 0, 0, 0],
-    [0, 1, 49, 0, 0, 0],
-    [1, 0, 0, 47, 2, 0],
-    [0, 0, 0, 1, 48, 1],
-    [1, 0, 0, 0, 0, 49],
-  ];
+  // The model card emits { labels, matrix } so the axes always correspond to the
+  // classes actually present in the holdout. An older shape was a bare number[][].
+  //
+  // There is deliberately no fallback matrix. This previously defaulted to an
+  // invented 6x6 grid with ~48 correct on every diagonal, which rendered as a
+  // near-perfect confusion matrix for a model that had not been evaluated at all.
+  const rawCm = evalMetrics.confusion_matrix;
+  const cmLabels: string[] =
+    rawCm && !Array.isArray(rawCm) && Array.isArray(rawCm.labels) ? rawCm.labels : [];
+  const confusionMatrix: number[][] = Array.isArray(rawCm)
+    ? rawCm
+    : rawCm && Array.isArray(rawCm.matrix)
+      ? rawCm.matrix
+      : [];
 
-  const classLabels = [
-    "Industrial Accidental",
-    "Persistent Flare",
-    "Wildfire",
-    "Stubble Burning",
-    "Mining",
-    "Uncertain",
-  ];
+  // Axis labels come from the matrix itself where available, else the model card's
+  // class list. The previous hardcoded list included "Uncertain", which is not a
+  // trained class - abstention is a decision rule applied at inference.
+  const classSource: string[] =
+    cmLabels.length > 0
+      ? cmLabels
+      : Array.isArray(evalMetrics.classes)
+        ? evalMetrics.classes
+        : [];
+  const classLabels: string[] = classSource.map(
+    (c) => FIRE_CLASS_LABELS[c as FireClass] ?? c,
+  );
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
@@ -74,27 +97,27 @@ export function ModelIntelligencePage() {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14 }}>
         <MetricCard
           label="Holdout Macro F1 Score"
-          value={loading ? "..." : (evalMetrics.macro_f1 ? `${(evalMetrics.macro_f1 * 100).toFixed(1)}%` : "76.8%")}
+          value={loading ? "..." : pct(evalMetrics.macro_f1)}
           meta="Chronological unseen holdout split"
           icon="🎯"
           trend="up"
         />
         <MetricCard
-          label="Holdout Accuracy"
-          value={loading ? "..." : (evalMetrics.accuracy ? `${(evalMetrics.accuracy * 100).toFixed(1)}%` : "84.2%")}
-          meta="Multi-class balanced evaluation"
+          label="Macro F1 (confident subset)"
+          value={loading ? "..." : pct(evalMetrics.macro_f1_on_confident_subset)}
+          meta="Excludes detections the model abstained on"
           icon="📊"
         />
         <MetricCard
           label="Spatial GroupKFold F1"
-          value={loading ? "..." : (evalMetrics.mean_spatial_cv_f1 ? `${(evalMetrics.mean_spatial_cv_f1 * 100).toFixed(1)}%` : "74.5%")}
+          value={loading ? "..." : pct(evalMetrics.mean_spatial_cv_f1)}
           meta="5-fold spatial cluster validation"
           icon="🌐"
         />
         <MetricCard
-          label="False Alert Rate"
-          value={loading ? "..." : (evalMetrics.false_alert_rate_industrial_fire !== undefined ? `${(evalMetrics.false_alert_rate_industrial_fire * 100).toFixed(2)}%` : "1.8%")}
-          meta="False positive industrial alerts"
+          label="Abstention Rate"
+          value={loading ? "..." : pct(evalMetrics.abstain_rate)}
+          meta="Routed to human verification queue"
           icon="🛡️"
         />
       </div>
@@ -116,16 +139,21 @@ export function ModelIntelligencePage() {
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span className="badge badge--success">ACTIVE INFERENCE ENGINE</span>
-            <span className="font-bold">{metrics?.active_model_name || "AgniNetra-TwoStage-XGBOOST"}</span>
-            <span className="text-xs text-muted">v{metrics?.version || "1.1.0"}</span>
+            <span className="font-bold">{metrics?.active_model_name || "No model loaded"}</span>
+            <span className="text-xs text-muted">v{metrics?.version ?? "—"}</span>
+            <span className="badge badge--info">{metrics?.algorithm ?? "—"}</span>
           </div>
           <div className="text-xs text-secondary" style={{ marginTop: 4 }}>
-            Two-stage hierarchical classifier: Stage 1 macro domain separation + Stage 2 industrial flare vs accidental fire classification with probability calibration.
+            {evalMetrics.data_provenance
+              ? `Trained on: ${evalMetrics.data_provenance}`
+              : "Site-level classifier over weakly-supervised FIRMS detections."}
           </div>
         </div>
 
         <div className="text-xs text-muted" style={{ textAlign: "right" }}>
-          Uncertainty Cutoff: <strong>&tau; &lt; 0.45</strong> &nbsp;•&nbsp; Features: <strong>37 Dimensions</strong>
+          Abstains below <strong>&tau; = 0.55</strong> &nbsp;•&nbsp; Features:{" "}
+          <strong>{evalMetrics.n_features ?? "—"}</strong> &nbsp;•&nbsp; Classes:{" "}
+          <strong>{Array.isArray(evalMetrics.classes) ? evalMetrics.classes.length : "—"}</strong>
         </div>
       </div>
 
@@ -136,23 +164,29 @@ export function ModelIntelligencePage() {
           {/* Top 10 Feature Importances */}
           <Card>
             <CardHeader
-              title="Top 10 Attribution Drivers"
-              subtitle="Normalized feature importance from Stage 1 & Stage 2 models"
+              title="Top Attribution Drivers"
+              subtitle="Normalized feature importance from the active model"
             />
+            {importanceData.length === 0 ? (
+              <div
+                className="text-muted text-xs"
+                style={{ padding: "48px 20px", textAlign: "center", lineHeight: 1.7 }}
+              >
+                <div style={{ fontSize: 22, marginBottom: 10 }}>📊</div>
+                <strong>No feature importances published by this model.</strong>
+                <div style={{ marginTop: 8 }}>
+                  The active model is{" "}
+                  <code>{metrics?.algorithm ?? "unknown"}</code>, which does not expose
+                  tree-style importance weights. Per-detection evidence is available on
+                  the Incident Investigation page instead.
+                </div>
+              </div>
+            ) : (
             <div style={{ height: 280, width: "100%", marginTop: 10 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart
                   layout="vertical"
-                  data={importanceData.length > 0 ? importanceData : [
-                    { name: "dist nearest facility", weight: 26.4 },
-                    { name: "persistence score 30d", weight: 18.2 },
-                    { name: "frp to historical ratio", weight: 14.5 },
-                    { name: "fire radiative power", weight: 11.8 },
-                    { name: "Sentinel-2 delta NBR", weight: 9.3 },
-                    { name: "nearby facility count 5km", weight: 7.1 },
-                    { name: "is nighttime", weight: 5.4 },
-                    { name: "land cover class", weight: 4.2 },
-                  ]}
+                  data={importanceData}
                   margin={{ top: 5, right: 30, left: 70, bottom: 5 }}
                 >
                   <XAxis type="number" fontSize={11} tickLine={false} unit="%" />
@@ -162,6 +196,7 @@ export function ModelIntelligencePage() {
                 </BarChart>
               </ResponsiveContainer>
             </div>
+            )}
           </Card>
 
           {/* Confusion Matrix Interactive Grid */}
@@ -230,7 +265,7 @@ export function ModelIntelligencePage() {
               1. Spatial GroupKFold Cross-Validation
             </div>
             <div className="text-xs text-secondary">
-              Groups coordinates into 10 regional Indian geographic clusters. Validation folds test on completely unseen regions to prevent spatial autocorrelation leakage.
+              Folds are grouped by DBSCAN site ID, so no physical site ever appears in both training and validation. A random split would place the same refinery on both sides and score well by memorising a location.
             </div>
           </div>
 
@@ -246,7 +281,7 @@ export function ModelIntelligencePage() {
               2. Strict Chronological 15% Holdout
             </div>
             <div className="text-xs text-secondary">
-              The final test evaluation is conducted exclusively on the chronologically latest 15% of acquisitions, ensuring zero future-to-past temporal data leakage.
+              The reported score comes from the chronologically latest 20% of acquisitions. The model is selected on cross-validation and never on this holdout, so it stays an honest estimate of unseen performance.
             </div>
           </div>
 

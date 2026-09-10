@@ -28,6 +28,17 @@ export function CommandMap({
 }: CommandMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
+
+  // Incremented each time a map instance finishes loading. The layer effect depends
+  // on it so that layers are re-applied to whatever map instance currently exists.
+  //
+  // React.StrictMode deliberately double-invokes effects in development: the map is
+  // created, torn down, and created again. Without this counter the layer effect ran
+  // once against the FIRST map, attached its listener there, and that map was then
+  // removed - so the surviving map never received the hotspot layers and the page
+  // rendered a basemap with no detections on it. Whether the map worked came down to
+  // effect interleaving, which is why it looked intermittent.
+  const [mapEpoch, setMapEpoch] = useState(0);
   const [coords, setCoords] = useState<{ lng: number; lat: number; zoom: number }>({
     lng: 78.96,
     lat: 20.59,
@@ -82,6 +93,8 @@ export function CommandMap({
           zoom: Number(map.getZoom().toFixed(1)),
         });
       });
+
+      map.on("load", () => setMapEpoch((n) => n + 1));
 
       mapRef.current = map;
     } catch (err) {
@@ -237,7 +250,7 @@ export function CommandMap({
     };
 
     updateLayers();
-  }, [hotspots, showHeatmap, showClusters, onSelectHotspot]);
+  }, [hotspots, showHeatmap, showClusters, onSelectHotspot, mapEpoch]);
 
   // Center on selected hotspot if changed
   useEffect(() => {
