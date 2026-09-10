@@ -33,9 +33,28 @@ logger = logging.getLogger(__name__)
 # Real Indian thermal sources. Coordinates are approximate site centroids, used so
 # the demo map shows recognisable locations rather than random points in the sea.
 KNOWN_SITES: List[Dict[str, Any]] = [
+    # Every facility class named in SIH26162 is represented here: oil refineries,
+    # petrochemical complexes, thermal power plants, steel industries, mining areas
+    # and LNG terminals - plus the natural and agricultural sources the classifier
+    # must segregate them from.
+    #
     # (name, lat, lon, site_type, osm_category)
+
+    # --- oil refineries ---
     {"name": "Jamnagar Refinery Complex", "lat": 22.350, "lon": 70.060, "site_type": "flare", "category": "industrial"},
     {"name": "Koyali Refinery, Vadodara", "lat": 22.350, "lon": 73.150, "site_type": "flare", "category": "industrial"},
+    {"name": "Panipat Refinery & Petrochemical", "lat": 29.330, "lon": 76.970, "site_type": "flare", "category": "industrial"},
+
+    # --- petrochemical complexes ---
+    {"name": "Haldia Petrochemicals, WB", "lat": 22.050, "lon": 88.080, "site_type": "flare", "category": "industrial"},
+    {"name": "Dahej Petrochemical Complex", "lat": 21.700, "lon": 72.580, "site_type": "flare", "category": "industrial"},
+
+    # --- LNG terminals (boil-off gas flaring: episodic, not continuous) ---
+    {"name": "Dahej LNG Terminal", "lat": 21.705, "lon": 72.530, "site_type": "lng", "category": "industrial"},
+    {"name": "Hazira LNG Terminal", "lat": 21.100, "lon": 72.650, "site_type": "lng", "category": "industrial"},
+    {"name": "Kochi LNG Terminal", "lat": 9.970, "lon": 76.250, "site_type": "lng", "category": "industrial"},
+
+    # --- steel industries & thermal power ---
     {"name": "Bhilai Steel Plant", "lat": 21.210, "lon": 81.380, "site_type": "furnace", "category": "industrial"},
     {"name": "Rourkela Steel Plant", "lat": 22.230, "lon": 84.860, "site_type": "furnace", "category": "industrial"},
     {"name": "Tata Steel, Jamshedpur", "lat": 22.800, "lon": 86.190, "site_type": "furnace", "category": "industrial"},
@@ -54,7 +73,7 @@ KNOWN_SITES: List[Dict[str, Any]] = [
 ]
 
 LC_BY_SITE_TYPE = {
-    "flare": 50, "furnace": 50, "landfill": 50,
+    "flare": 50, "furnace": 50, "landfill": 50, "lng": 50,
     "mine": 60, "cropland": 40, "forest": 10,
 }
 
@@ -78,8 +97,8 @@ def build_facility_registry() -> List[Dict[str, Any]]:
 
 
 def simulate_detections(
-    start_date: datetime.date = datetime.date(2025, 3, 1),
-    n_days: int = 365,
+    start_date: datetime.date = datetime.date(2024, 9, 1),
+    n_days: int = 730,
     random_state: int = 42,
 ) -> pd.DataFrame:
     """Simulate FIRMS-schema detections by modelling each source's burn behaviour.
@@ -103,12 +122,22 @@ def simulate_detections(
     # operating baseline. They are not drawn from a separate "accident" distribution -
     # the same site burns normally on every other day of the series, which is what
     # forces the model to learn the anomaly rather than memorise the location.
+    # Spread across the whole series on purpose. The chronological holdout takes the
+    # final 20% of days, so incidents clustered early would leave the accident class
+    # with zero holdout support - unscoreable on exactly the category the system
+    # exists to catch. Several deliberately fall inside the holdout window.
     incidents = {
-        "Jamnagar Refinery Complex": (90, 2),
-        "Bhilai Steel Plant": (40, 2),
+        "Jamnagar Refinery Complex": (90, 2),      # refinery unit fire
+        "Bhilai Steel Plant": (40, 2),             # steel plant blast
         "Koyali Refinery, Vadodara": (135, 1),
         "Tata Steel, Jamshedpur": (62, 2),
         "Korba Thermal Power": (152, 1),
+        "Dahej LNG Terminal": (118, 1),            # LNG release + ignition
+        "Haldia Petrochemicals, WB": (203, 2),     # petrochemical unit fire
+        "Panipat Refinery & Petrochemical": (416, 2),
+        "Rourkela Steel Plant": (612, 2),          # inside holdout window
+        "Hazira LNG Terminal": (658, 1),           # inside holdout window
+        "Dahej Petrochemical Complex": (701, 2),   # inside holdout window
     }
 
     for site in KNOWN_SITES:
@@ -184,6 +213,14 @@ def _burn_profile(
         n = int(rng.random() < 0.88) * int(rng.integers(1, 3))
         return n, 45.0, 345.0, 385.0, 0.85, 0.2
 
+    if site_type == "lng":
+        # Boil-off gas flaring at an LNG terminal is episodic, not continuous:
+        # it spikes around tanker unloading and tank pressure management rather
+        # than burning every night the way a refinery relief flare does. Lower
+        # persistence than a flare, but the same small very-hot signature.
+        n = int(rng.random() < 0.45) * int(rng.integers(1, 3))
+        return n, 30.0, 340.0, 378.0, 0.80, 0.25
+
     if site_type == "furnace":
         n = int(rng.random() < 0.72) * int(rng.integers(1, 3))
         return n, 60.0, 335.0, 370.0, 0.55, 0.3
@@ -217,6 +254,22 @@ def _burn_profile(
     return 0, 0.0, 0.0, 0.0, 0.0, 0.0
 
 
+def expected_superclass_for_site_type(site_type: str) -> str:
+    """Roll a site type up to the INDUSTRIAL / NATURAL / AGRICULTURAL axis.
+
+    SIH26162 deliverable (i) is "classification and segregation of Industrial fires
+    from forest fires and other natural fires", so this coarse axis is the primary
+    thing the system is scored on. The five-class output refines it; it does not
+    replace it.
+    """
+    return {
+        "flare": "INDUSTRIAL", "lng": "INDUSTRIAL", "furnace": "INDUSTRIAL",
+        "landfill": "INDUSTRIAL", "mine": "INDUSTRIAL",
+        "cropland": "AGRICULTURAL",
+        "forest": "NATURAL",
+    }.get(site_type, "UNKNOWN")
+
+
 def expected_class_for_site_type(site_type: str) -> str:
     """Map known infrastructure type to the class a correct labeller should assign.
 
@@ -224,6 +277,7 @@ def expected_class_for_site_type(site_type: str) -> str:
     """
     return {
         "flare": "persistent_industrial_source",
+        "lng": "persistent_industrial_source",
         "furnace": "persistent_industrial_source",
         "landfill": "persistent_industrial_source",
         "mine": "mining_or_other",

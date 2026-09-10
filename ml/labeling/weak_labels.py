@@ -40,6 +40,29 @@ TRAINED_CLASSES: List[str] = [
     "mining_or_other",
 ]
 
+# SIH26162 deliverable (i) is "classification and segregation of Industrial fires
+# from forest fires and other natural fires". That coarse axis is the primary thing
+# the system is judged on; the five classes above refine it rather than replace it.
+#
+# Agricultural burning is deliberately its own tier: it is anthropogenic, so calling
+# it "natural" would be wrong, but it is not industrial either. Collapsing it into
+# either bucket would inflate the headline segregation score by mislabelling roughly
+# a sixth of all Indian detections.
+SUPERCLASS: Dict[str, str] = {
+    "persistent_industrial_source": "INDUSTRIAL",
+    "accidental_industrial_fire": "INDUSTRIAL",
+    "mining_or_other": "INDUSTRIAL",
+    "forest_or_natural_fire": "NATURAL",
+    "agricultural_burning": "AGRICULTURAL",
+}
+
+
+def to_superclass(fire_class: Optional[str]) -> Optional[str]:
+    """Map a fine-grained class onto the INDUSTRIAL / NATURAL / AGRICULTURAL axis."""
+    if fire_class is None:
+        return None
+    return SUPERCLASS.get(fire_class)
+
 # ESA WorldCover class codes
 LC_TREE = 10
 LC_SHRUB = 20
@@ -89,7 +112,10 @@ def lf_frp_anomaly_at_known_site(r: pd.Series) -> Optional[str]:
     baseline = r.get("site_frp_median", 0.0)
     sigma = r.get("site_frp_sigma_robust", 0.0)
     if (
-        r.get("dist_industrial_km", 99.0) <= 1.0
+        # Site-level distance, not this pixel's. An incident scatters across more
+        # pixels than routine operation, so the one detection whose jitter carries it
+        # past a per-pixel gate is disproportionately likely to be the incident.
+        r.get("site_dist_industrial_km", 99.0) <= 1.0
         and r.get("persistence_ratio", 0.0) >= 0.20
         and baseline > 0.0
         and sigma > 0.0
@@ -104,7 +130,7 @@ def lf_industrial_transient_high_frp(r: pd.Series) -> Optional[str]:
     """A large transient thermal event inside industrial land with no persistence
     history is an accident at a site that does not normally burn."""
     if (
-        r.get("dist_industrial_km", 99.0) <= 0.5
+        r.get("site_dist_industrial_km", 99.0) <= 0.5
         and r.get("persistence_ratio", 1.0) <= 0.10
         and r.get("frp", 0.0) >= 150.0
     ):

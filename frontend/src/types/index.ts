@@ -308,6 +308,18 @@ export interface ModelMetrics {
   };
   feature_importances: Record<string, number>;
   model_card?: {
+    /**
+     * SIH26162 deliverable (i): segregation of industrial fires from forest fires
+     * and other natural fires, on the INDUSTRIAL / NATURAL / AGRICULTURAL axis.
+     */
+    deliverable_i_segregation?: {
+      axis?: string;
+      macro_f1?: number;
+      accuracy?: number;
+      confusion_matrix?: { labels: string[]; matrix: number[][] };
+      per_class?: Record<string, Record<string, number>>;
+      industrial_vs_natural_binary?: { n?: number; accuracy?: number; macro_f1?: number };
+    };
     model_name?: string;
     version?: string;
     description?: string;

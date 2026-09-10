@@ -218,6 +218,39 @@ def add_infrastructure_distances(
     return out
 
 
+def add_site_infrastructure_context(df: pd.DataFrame) -> pd.DataFrame:
+    """Roll infrastructure distance up to the site, using the site's median.
+
+    A per-detection distance carries the full geolocation jitter of one overpass, so
+    a rule gated on it is deciding a continuous quantity with a hard cutoff. In
+    practice a single detection at 1.04 km and its neighbour at 0.99 km are the same
+    physical event, but a 1.0 km gate labels them differently - and the one that slips
+    past is exactly the high-FRP incident pixel, because incidents are scattered
+    across more pixels than routine operation.
+
+    Attribution belongs to the site, not to each pixel: the site is the thing that
+    sits inside a refinery. Taking the median across the site's detections is robust
+    to individual outliers while still moving if the whole cluster is genuinely
+    distant from any mapped facility.
+    """
+    out = df.copy()
+    if out.empty or "site_id" not in out.columns:
+        for cat in ("industrial", "mine", "landfill"):
+            out["site_dist_" + cat + "_km"] = MAX_DIST_KM
+        return out
+
+    for cat in ("industrial", "mine", "landfill"):
+        col = "dist_" + cat + "_km"
+        if col not in out.columns:
+            out["site_dist_" + cat + "_km"] = MAX_DIST_KM
+            continue
+        out["site_dist_" + cat + "_km"] = (
+            out.groupby("site_id")[col].transform("median").round(4)
+        )
+
+    return out
+
+
 def _matches_category(raw: Any, category: str) -> bool:
     """Map a facility's OSM-derived type string onto a coarse category."""
     if raw is None:
@@ -295,6 +328,7 @@ def build_feature_frame(
     df = assign_sites(detections, eps_km=eps_km)
     df = compute_site_statistics(df)
     df = add_infrastructure_distances(df, facilities)
+    df = add_site_infrastructure_context(df)
     df = add_thermal_features(df)
 
     if land_cover is not None:
@@ -356,6 +390,9 @@ SITE_FEATURE_COLUMNS: List[str] = [
     "dist_industrial_km",
     "dist_mine_km",
     "dist_landfill_km",
+    "site_dist_industrial_km",
+    "site_dist_mine_km",
+    "site_dist_landfill_km",
     "count_industrial_5km",
     "count_mine_5km",
     "count_landfill_5km",

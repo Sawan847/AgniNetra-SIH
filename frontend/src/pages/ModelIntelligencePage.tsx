@@ -91,8 +91,104 @@ export function ModelIntelligencePage() {
     (c) => FIRE_CLASS_LABELS[c as FireClass] ?? c,
   );
 
+  const seg = metrics?.model_card?.deliverable_i_segregation;
+  const segCm = seg?.confusion_matrix;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      {/*
+        SIH26162 deliverable (i) — "classification and segregation of Industrial
+        fires from forest fires and other natural fires" — is the primary thing the
+        problem statement asks for, so it leads the page rather than being implicit
+        in a 5-class macro-F1 that mixes it with the finer distinctions.
+      */}
+      {seg && (
+        <Card>
+          <CardHeader
+            title="Deliverable (i) — Industrial vs Natural segregation"
+            subtitle={seg.axis}
+          />
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              alignItems: "center",
+              gap: 28,
+              padding: "6px 4px 4px",
+            }}
+          >
+            <div>
+              <div className="text-xs text-muted">Segregation macro F1</div>
+              <div style={{ fontSize: 34, fontWeight: 700, lineHeight: 1.1 }}>
+                {pct(seg.macro_f1)}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs text-muted">Accuracy</div>
+              <div style={{ fontSize: 34, fontWeight: 700, lineHeight: 1.1 }}>
+                {pct(seg.accuracy)}
+              </div>
+            </div>
+            {seg.industrial_vs_natural_binary && (
+              <div>
+                <div className="text-xs text-muted">
+                  Industrial vs Natural only
+                  <span className="text-muted"> (n={seg.industrial_vs_natural_binary.n})</span>
+                </div>
+                <div style={{ fontSize: 34, fontWeight: 700, lineHeight: 1.1 }}>
+                  {pct(seg.industrial_vs_natural_binary.macro_f1)}
+                </div>
+              </div>
+            )}
+
+            {segCm && segCm.labels?.length > 0 && (
+              <div className="table-container" style={{ flex: "1 1 300px", minWidth: 260 }}>
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th style={{ textAlign: "left" }}>Actual \ Pred</th>
+                      {segCm.labels.map((l) => (
+                        <th key={l} style={{ padding: "6px 8px" }}>{l.slice(0, 6)}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {segCm.matrix.map((row, rIdx) => (
+                      <tr key={rIdx}>
+                        <td style={{ textAlign: "left", fontWeight: 700 }}>
+                          {segCm.labels[rIdx]}
+                        </td>
+                        {row.map((v, cIdx) => (
+                          <td
+                            key={cIdx}
+                            style={{
+                              textAlign: "center",
+                              background:
+                                rIdx === cIdx
+                                  ? "rgba(22, 163, 74, 0.15)"
+                                  : v > 0
+                                    ? "rgba(234, 88, 12, 0.10)"
+                                    : "transparent",
+                            }}
+                          >
+                            {v}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+          <div className="text-xs text-muted" style={{ marginTop: 10, lineHeight: 1.6 }}>
+            Agricultural burning is scored as its own tier rather than folded into
+            “natural”. It is anthropogenic, and collapsing it into either bucket would
+            inflate this figure by mislabelling roughly a sixth of all Indian detections.
+          </div>
+        </Card>
+      )}
+
       {/* KPI Evaluation Metrics */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14 }}>
         <MetricCard

@@ -40,9 +40,11 @@ from sklearn.preprocessing import StandardScaler
 
 from ml.features.site_features import SITE_FEATURE_COLUMNS, build_feature_frame
 from ml.labeling.weak_labels import (
+    SUPERCLASS,
     TRAINED_CLASSES,
     apply_weak_labels,
     label_coverage_report,
+    to_superclass,
 )
 
 logger = logging.getLogger(__name__)
@@ -137,12 +139,82 @@ def train(
     )
     cm = confusion_matrix(y_te, final_preds, labels=labels_present).tolist()
 
+    # A class the model predicts but which has zero support in the holdout scores
+    # F1 = 0 and is folded into the macro average, which pulls the headline number
+    # down for a reason that has nothing to do with model quality. Seasonal classes
+    # hit this constantly: crop residue burning happens Oct-Nov and Apr-May, so a
+    # naive chronological tail can exclude it entirely.
+    #
+    # Report both numbers. The supported-class macro is the fair measure of what was
+    # actually tested; the all-class macro is kept so nothing looks hidden.
+    supported = sorted(set(y_te))
+    unsupported_predicted = sorted(set(final_preds) - set(y_te))
+    macro_all = float(f1_score(y_te, final_preds, average="macro", zero_division=0))
+    macro_supported = float(
+        f1_score(y_te, final_preds, labels=supported, average="macro", zero_division=0)
+    )
+    if unsupported_predicted:
+        logger.warning(
+            "Holdout has no examples of %s, but the model predicted them %d times. "
+            "Macro-F1 over supported classes only: %.4f (all classes: %.4f)",
+            ", ".join(unsupported_predicted),
+            int(np.isin(final_preds, unsupported_predicted).sum()),
+            macro_supported, macro_all,
+        )
+
     max_prob = final_probs.max(axis=1)
     abstain_rate = float((max_prob < ABSTAIN_THRESHOLD).mean())
     confident = max_prob >= ABSTAIN_THRESHOLD
     f1_confident = (
         float(f1_score(y_te[confident], final_preds[confident], average="macro", zero_division=0))
         if confident.any() else 0.0
+    )
+
+    # SIH26162 deliverable (i): segregation of industrial fires from forest fires and
+    # other natural fires. This is the headline number the problem statement asks for,
+    # so it is computed and reported explicitly rather than left implicit in a 5-class
+    # macro-F1 that mixes it with the finer distinctions.
+    y_te_super = np.array([to_superclass(c) for c in y_te])
+    pred_super = np.array([to_superclass(c) for c in final_preds])
+    super_labels = sorted(set(y_te_super) | set(pred_super))
+    segregation = {
+        "axis": "INDUSTRIAL vs NATURAL vs AGRICULTURAL",
+        "macro_f1": round(
+            float(f1_score(y_te_super, pred_super, average="macro", zero_division=0)), 4
+        ),
+        "accuracy": round(float((y_te_super == pred_super).mean()), 4),
+        "per_class": {
+            k: {kk: round(float(vv), 4) for kk, vv in v.items()}
+            for k, v in classification_report(
+                y_te_super, pred_super, labels=super_labels,
+                output_dict=True, zero_division=0,
+            ).items()
+            if isinstance(v, dict)
+        },
+        "confusion_matrix": {
+            "labels": super_labels,
+            "matrix": confusion_matrix(y_te_super, pred_super, labels=super_labels).tolist(),
+        },
+    }
+
+    # The strict industrial-vs-natural binary the deliverable names, with agricultural
+    # detections excluded rather than folded into either side.
+    bin_mask = np.isin(y_te_super, ["INDUSTRIAL", "NATURAL"])
+    if bin_mask.any():
+        segregation["industrial_vs_natural_binary"] = {
+            "n": int(bin_mask.sum()),
+            "accuracy": round(
+                float((y_te_super[bin_mask] == pred_super[bin_mask]).mean()), 4
+            ),
+            "macro_f1": round(
+                float(f1_score(y_te_super[bin_mask], pred_super[bin_mask],
+                               average="macro", zero_division=0)), 4
+            ),
+        }
+
+    logger.info(
+        "Deliverable (i) segregation: macro-F1 %.4f over %s",
+        segregation["macro_f1"], ", ".join(super_labels),
     )
 
     ablation = run_ablation(labelled, algo="random_forest")
@@ -192,9 +264,12 @@ def train(
             "Model selected on CV, never on the holdout."
         ),
         "algorithm_comparison": results,
+        "deliverable_i_segregation": segregation,
         "selected_model_metrics": {
-            "temporal_holdout_macro_f1": round(
-                float(f1_score(y_te, final_preds, average="macro", zero_division=0)), 4),
+            "temporal_holdout_macro_f1": round(macro_supported, 4),
+            "temporal_holdout_macro_f1_all_classes": round(macro_all, 4),
+            "holdout_supported_classes": supported,
+            "holdout_unsupported_but_predicted": unsupported_predicted,
             "abstain_rate": round(abstain_rate, 4),
             "macro_f1_on_confident_subset": round(f1_confident, 4),
             "per_class": {
