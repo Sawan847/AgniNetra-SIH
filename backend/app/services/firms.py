@@ -25,12 +25,46 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Supported NASA FIRMS NRT VIIRS sources
-SUPPORTED_FIRMS_SOURCES = [
+# The FIRMS MAP_KEY travels inside the URL path, not a header. httpx logs every
+# request line at INFO ("HTTP Request: GET <full url> ..."), so enabling INFO logging
+# anywhere in the process printed the raw key to the console and into any log file -
+# defeating the masking this module does on its own log lines.
+#
+# Silence httpx's request logging here, at the one place a secret-bearing URL is
+# constructed. Warnings and errors still propagate.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+# Near-real-time products. Low latency (~3 h) but short retention - roughly the last
+# two months - so they cannot reach a past burning season.
+FIRMS_NRT_SOURCES = [
     "VIIRS_SNPP_NRT",
     "VIIRS_NOAA20_NRT",
     "VIIRS_NOAA21_NRT",
 ]
+
+# Standard-processing archive products. Higher latency but years of retention:
+# VIIRS_SNPP_SP reaches back to 2012, MODIS_SP to 2000.
+#
+# These matter for this problem statement more than the NRT feed does. India's fire
+# regime is strongly seasonal - paddy residue burns Oct-Nov, wheat residue Apr-May,
+# forest fires Feb-Jun - so a 60-day NRT window landing in the monsoon contains
+# almost no agricultural or vegetation fire at all. Training or demonstrating
+# classification of those categories requires reaching into the archive.
+FIRMS_SP_SOURCES = [
+    "VIIRS_SNPP_SP",
+    "VIIRS_NOAA20_SP",
+    "MODIS_SP",
+]
+
+# Burned-area products. A detection followed by a burn scar is independent physical
+# confirmation of a vegetation fire, and is what lf_forest_burn_scar needs.
+FIRMS_BURNED_AREA_SOURCES = [
+    "BA_MODIS",
+    "BA_VIIRS",
+]
+
+SUPPORTED_FIRMS_SOURCES = FIRMS_NRT_SOURCES + FIRMS_SP_SOURCES
 
 # Required columns in FIRMS VIIRS CSV responses
 REQUIRED_CSV_COLUMNS = [
@@ -224,6 +258,20 @@ class FIRMSClient:
                     "acq_time": acq_time_obj,
                     "daynight": daynight,
                     "source": source_label,
+                    # NASA's own coarse inference, present on the SP archive products
+                    # and absent from NRT:
+                    #   0 presumed vegetation fire   1 active volcano
+                    #   2 other static land source   3 offshore
+                    #
+                    # Deliberately NOT used as a model feature and NOT used to derive
+                    # weak labels. It is retained purely as an independent baseline to
+                    # measure our classification against - the problem statement's
+                    # premise is that FIRMS "does not distinguish" between fire types,
+                    # and this column is the sharpest available way to demonstrate
+                    # exactly how much finer our output is. Feeding it into the model
+                    # and then comparing against it would make that comparison
+                    # circular and worthless.
+                    "firms_type": self._safe_float(row.get("type")),
                     "raw_data": dict(row),
                 }
                 records.append(record)

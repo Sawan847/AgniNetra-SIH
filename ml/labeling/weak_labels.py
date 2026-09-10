@@ -180,6 +180,59 @@ def lf_forest_landcover_transient(r: pd.Series) -> Optional[str]:
     return ABSTAIN
 
 
+def lf_forest_inferred_no_landcover(r: pd.Series) -> Optional[str]:
+    """Vegetation fire inferred from behaviour when land cover is unavailable.
+
+    NASA's FIRMS CSV carries no land-cover column, so on live data
+    land_cover_class is 0 for every detection unless a separate raster or OSM
+    landuse join has been run. The land-cover-gated rule above then never fires,
+    and wildfire - one of the two sides of this problem statement's primary
+    deliverable - receives no labels at all.
+
+    This is the fallback: a fire far from any mapped industry, that burns once and
+    stops, radiating hard. Industrial sources are persistent by definition and
+    agricultural burning is weak and diurnal, so a strong transient far from
+    infrastructure is most consistent with vegetation.
+
+    Deliberately weaker than the land-cover-confirmed rule, and priced lower in the
+    priority order, because it infers rather than observes the surface type.
+    """
+    if r.get("land_cover_class", 0) not in (0, None):
+        return ABSTAIN                      # defer to the confirmed rule
+    if (
+        r.get("dist_industrial_km", 0.0) > 5.0
+        and r.get("persistence_ratio", 1.0) <= 0.15
+        and (r.get("frp", 0.0) >= 80.0 or r.get("is_nighttime", 0) == 1)
+    ):
+        return "forest_or_natural_fire"
+    return ABSTAIN
+
+
+def lf_crop_residue_inferred_no_landcover(r: pd.Series) -> Optional[str]:
+    """Crop residue burning inferred from behaviour when land cover is unavailable.
+
+    Same gap as above. Stubble burning has a distinctive signature that survives
+    without knowing the surface type: it happens in daylight, radiates weakly, does
+    not recur at the same spot, sits away from industry, and stops dead outside the
+    harvest window. The seasonal gate does most of the work here and is the reason
+    this can be separated from a small vegetation fire at all.
+    """
+    if r.get("land_cover_class", 0) not in (0, None):
+        return ABSTAIN                      # defer to the confirmed rule
+    doy = r.get("day_of_year", 0)
+    in_kharif = 274 <= doy <= 334          # 1 Oct - 30 Nov, paddy residue
+    in_rabi = 105 <= doy <= 152            # 15 Apr - 31 May, wheat residue
+    if (
+        (in_kharif or in_rabi)
+        and r.get("is_nighttime", 1) == 0
+        and r.get("frp", 999.0) <= 50.0
+        and r.get("persistence_ratio", 1.0) <= 0.20
+        and r.get("dist_industrial_km", 0.0) > 2.0
+    ):
+        return "agricultural_burning"
+    return ABSTAIN
+
+
 def lf_crop_residue_season(r: pd.Series) -> Optional[str]:
     """Crop residue burning: cropland, in-season, daytime, low FRP.
 
@@ -224,8 +277,15 @@ LABELING_FUNCTIONS = [
     (lf_persistent_near_industry, 60),
     (lf_landfill_persistent, 55),
     (lf_mine_proximity, 50),
+    # Land-cover-confirmed rules outrank the inferred ones: an observed surface type
+    # is better evidence than one deduced from burn behaviour.
     (lf_crop_residue_season, 40),
     (lf_forest_landcover_transient, 30),
+    # Fallbacks for live FIRMS data, which carries no land-cover column at all.
+    # Without these, wildfire and crop burning receive no labels on real data and
+    # deliverable (i) has nothing on the "natural fires" side to segregate against.
+    (lf_crop_residue_inferred_no_landcover, 25),
+    (lf_forest_inferred_no_landcover, 20),
 ]
 
 

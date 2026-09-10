@@ -72,6 +72,112 @@ class OverpassClient:
         """
         return query.strip()
 
+    def build_landcover_query(self, bbox: Tuple[float, float, float, float]) -> str:
+        """Overpass QL for surface type: forest, scrub, cropland, grassland.
+
+        NASA's FIRMS product carries no land-cover field, so without this every
+        detection arrives with an unknown surface type and the labelling rules that
+        identify wildfire and crop residue burning cannot fire.
+
+        Only ways and relations are requested, and only centroids are returned
+        (`out center`). India has an enormous number of farmland polygons and asking
+        for full geometry does not complete; a centroid is sufficient because the
+        feature pipeline only needs a nearest-neighbour lookup.
+        """
+        min_lon, min_lat, max_lon, max_lat = bbox
+        b = f"{min_lat},{min_lon},{max_lat},{max_lon}"
+        return f"""
+        [out:json][timeout:90];
+        (
+          way["natural"="wood"]({b});
+          relation["natural"="wood"]({b});
+          way["landuse"="forest"]({b});
+          relation["landuse"="forest"]({b});
+
+          way["natural"="scrub"]({b});
+
+          way["landuse"="farmland"]({b});
+          way["landuse"="orchard"]({b});
+          way["landuse"="vineyard"]({b});
+
+          way["landuse"="meadow"]({b});
+          way["natural"="grassland"]({b});
+        );
+        out center tags;
+        """.strip()
+
+    def fetch_landcover(
+        self, bbox: Tuple[float, float, float, float]
+    ) -> List[Dict[str, Any]]:
+        """Fetch land-cover centroids, returned as ESA WorldCover-style codes.
+
+        Reuses the same request, retry and cache machinery as fetch_infrastructure,
+        under a separate cache key so the two layers never collide.
+        """
+        query = self.build_landcover_query(bbox)
+        min_lon, min_lat, max_lon, max_lat = bbox
+        bbox_key = f"landcover_{min_lon}_{min_lat}_{max_lon}_{max_lat}"
+
+        cached = self._load_cached_response(bbox_key)
+        if cached is not None:
+            return self._parse_landcover_elements(cached)
+
+        headers = {
+            "User-Agent": "AgniNetra-AI-Geospatial-Platform/0.1.0 (contact@agnietra.gov.in)",
+            "Content-Type": "application/x-www-form-urlencoded",
+        }
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                with httpx.Client(timeout=self.timeout) as client:
+                    resp = client.post(self.endpoint_url, data={"data": query}, headers=headers)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    self._cache_raw_response(bbox_key, data)
+                    return self._parse_landcover_elements(data)
+                if resp.status_code in (429, 504):
+                    time.sleep(attempt * 5)
+                    continue
+                resp.raise_for_status()
+            except Exception as exc:
+                logger.warning("Land-cover tile attempt %d failed: %s", attempt, str(exc)[:80])
+                time.sleep(attempt * 2)
+        return []
+
+    @staticmethod
+    def _parse_landcover_elements(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Map OSM landuse/natural tags onto ESA WorldCover class codes.
+
+        Codes match ml.labeling.weak_labels so the labelling rules read the same
+        vocabulary whether the surface type came from OSM or from a WorldCover raster.
+        """
+        tag_to_code = {
+            ("natural", "wood"): 10,
+            ("landuse", "forest"): 10,
+            ("natural", "scrub"): 20,
+            ("natural", "grassland"): 30,
+            ("landuse", "meadow"): 30,
+            ("landuse", "farmland"): 40,
+            ("landuse", "orchard"): 40,
+            ("landuse", "vineyard"): 40,
+        }
+        out: List[Dict[str, Any]] = []
+        for elem in raw.get("elements", []) or []:
+            tags = elem.get("tags") or {}
+            code = None
+            for (k, v), c in tag_to_code.items():
+                if tags.get(k) == v:
+                    code = c
+                    break
+            if code is None:
+                continue
+            centre = elem.get("center") or {}
+            lat = elem.get("lat") or centre.get("lat")
+            lon = elem.get("lon") or centre.get("lon")
+            if lat is None or lon is None:
+                continue
+            out.append({"latitude": float(lat), "longitude": float(lon), "land_cover_class": code})
+        return out
+
     def fetch_infrastructure(
         self, bbox: Tuple[float, float, float, float]
     ) -> List[Dict[str, Any]]:

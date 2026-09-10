@@ -268,6 +268,63 @@ def _matches_category(raw: Any, category: str) -> bool:
     return False
 
 
+def assign_land_cover(
+    df: pd.DataFrame,
+    land_cover_points: Optional[Sequence[Dict[str, Any]]],
+    max_km: float = 3.0,
+) -> pd.DataFrame:
+    """Attach a surface type to each detection from nearby land-cover centroids.
+
+    FIRMS reports no land cover, so without this every detection carries class 0 and
+    the labelling rules for wildfire and crop residue burning cannot distinguish
+    forest from farmland at all.
+
+    Nearest centroid within max_km wins. Beyond that the answer is left as 0
+    (unknown) rather than guessed - a detection 20 km from the nearest mapped
+    woodland is not evidence of woodland, and the labelling rules have explicit
+    fallbacks for the unknown case.
+    """
+    out = df.copy()
+    if "land_cover_class" not in out.columns:
+        out["land_cover_class"] = 0.0
+
+    if out.empty or not land_cover_points:
+        return out
+
+    pts, codes = [], []
+    for p in land_cover_points:
+        lat, lon = p.get("latitude"), p.get("longitude")
+        code = p.get("land_cover_class")
+        if lat is None or lon is None or code is None:
+            continue
+        pts.append((float(lat), float(lon)))
+        codes.append(float(code))
+
+    if not pts:
+        return out
+
+    tree = BallTree(np.radians(np.asarray(pts)), metric="haversine")
+    det_rad = np.radians(out[["latitude", "longitude"]].to_numpy(dtype=float))
+    dist_rad, idx = tree.query(det_rad, k=1)
+
+    dist_km = dist_rad[:, 0] * EARTH_RADIUS_KM
+    nearest = np.asarray(codes)[idx[:, 0]]
+
+    # Only overwrite where the detection has no surface type yet, so a value from a
+    # higher-quality source (a WorldCover raster, say) is never clobbered by OSM.
+    existing = pd.to_numeric(out["land_cover_class"], errors="coerce").fillna(0.0).to_numpy()
+    assign = (dist_km <= max_km) & (existing == 0)
+    existing[assign] = nearest[assign]
+    out["land_cover_class"] = existing
+    out["land_cover_dist_km"] = np.minimum(dist_km, MAX_DIST_KM).round(4)
+
+    logger.info(
+        "Land cover assigned to %d of %d detections from %d OSM centroids (<= %.0f km)",
+        int(assign.sum()), len(out), len(pts), max_km,
+    )
+    return out
+
+
 def add_thermal_features(df: pd.DataFrame) -> pd.DataFrame:
     """Per-detection radiometric and temporal features.
 
@@ -315,6 +372,7 @@ def build_feature_frame(
     detections: pd.DataFrame,
     facilities: Optional[Sequence[Dict[str, Any]]] = None,
     land_cover: Optional[pd.Series] = None,
+    land_cover_points: Optional[Sequence[Dict[str, Any]]] = None,
     eps_km: float = DEFAULT_CLUSTER_EPS_KM,
 ) -> pd.DataFrame:
     """Full feature pipeline: cluster, characterise, locate, and describe.
@@ -335,6 +393,10 @@ def build_feature_frame(
         df["land_cover_class"] = land_cover.reindex(df.index).fillna(0).astype(float)
     elif "land_cover_class" not in df.columns:
         df["land_cover_class"] = 0.0
+
+    # Fill unknown surface types from OSM landuse centroids. Runs after the explicit
+    # land_cover argument so a better source always wins.
+    df = assign_land_cover(df, land_cover_points)
 
     # burn_scar_within_30d is populated by the MCD64A1 join when available; absent
     # that product the corresponding labelling function simply never fires.

@@ -38,6 +38,7 @@ from sklearn.metrics import classification_report, confusion_matrix, f1_score
 from sklearn.model_selection import GroupKFold
 from sklearn.preprocessing import StandardScaler
 
+from ml.evaluation.firms_baseline import compare_against_firms_type
 from ml.features.site_features import SITE_FEATURE_COLUMNS, build_feature_frame
 from ml.labeling.weak_labels import (
     SUPERCLASS,
@@ -61,9 +62,12 @@ ABSTAIN_THRESHOLD = 0.55
 def build_training_frame(
     detections: pd.DataFrame,
     facilities: Optional[List[Dict[str, Any]]] = None,
+    land_cover_points: Optional[List[Dict[str, Any]]] = None,
 ) -> pd.DataFrame:
     """Feature-engineer and weakly label a set of raw detections."""
-    feats = build_feature_frame(detections, facilities=facilities)
+    feats = build_feature_frame(
+        detections, facilities=facilities, land_cover_points=land_cover_points
+    )
     labelled = apply_weak_labels(feats)
     return labelled
 
@@ -217,6 +221,8 @@ def train(
         segregation["macro_f1"], ", ".join(super_labels),
     )
 
+    firms_baseline = compare_against_firms_type(labelled)
+
     ablation = run_ablation(labelled, algo="random_forest")
     logger.info(
         "Ablation: all-features CV=%.4f -> withholding rule features CV=%.4f (delta %.4f)",
@@ -265,6 +271,7 @@ def train(
         ),
         "algorithm_comparison": results,
         "deliverable_i_segregation": segregation,
+        "firms_type_baseline": firms_baseline,
         "selected_model_metrics": {
             "temporal_holdout_macro_f1": round(macro_supported, 4),
             "temporal_holdout_macro_f1_all_classes": round(macro_all, 4),
