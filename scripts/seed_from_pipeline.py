@@ -43,10 +43,38 @@ logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 logger = logging.getLogger("seed_pipeline")
 
 
+
+def _parse_acq_time(raw) -> datetime.time:
+    """Parse an acquisition time from either FIRMS' raw form or a round-tripped one.
+
+    FIRMS CSV carries HHMM as a bare integer ("621", "0621"). Once that has been
+    through the parser and written back out to CSV it becomes "06:21:00". The seeder
+    must accept both, because it loads either raw simulator output or an already
+    processed dataset.
+    """
+    t = str(raw or "").strip()
+    if not t:
+        return datetime.time(0, 0)
+    if ":" in t:
+        parts = t.split(":")
+        try:
+            return datetime.time(int(parts[0]) % 24, int(parts[1]) % 60)
+        except (ValueError, IndexError):
+            return datetime.time(0, 0)
+    t = t.split(".")[0].zfill(4)
+    try:
+        return datetime.time(int(t[:2]) % 24, int(t[2:4]) % 60)
+    except ValueError:
+        return datetime.time(0, 0)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--reset", action="store_true", help="delete existing detections first")
     ap.add_argument("--limit", type=int, default=0, help="cap detections (0 = all)")
+    ap.add_argument("--from-processed", type=str, default=None,
+                    help="load an already-labelled dataset (data/processed/labelled_detections.csv) "
+                         "instead of running the offline simulator - use this to seed real FIRMS data")
     args = ap.parse_args()
 
     from app.database import Base, SessionLocal, engine
@@ -72,10 +100,46 @@ def main() -> None:
                 logger.info("Deleted %d rows from %s", n, model.__tablename__)
             db.commit()
 
-        detections = simulate_detections()
-        if args.limit:
-            detections = detections.head(args.limit)
-        facilities = build_facility_registry()
+        if args.from_processed:
+            # Real pipeline output: already clustered, feature-engineered and labelled
+            # by scripts/build_dataset.py. Re-running the feature pipeline here would
+            # recompute persistence from a truncated slice and silently disagree with
+            # the model card.
+            logger.info("Loading labelled dataset from %s", args.from_processed)
+            feats_pre = pd.read_csv(args.from_processed, low_memory=False)
+            if args.limit and len(feats_pre) > args.limit:
+                # Systematic sample across the whole file, not head().
+                #
+                # The dataset is ordered by acquisition date, so head() returns only
+                # the earliest days. On a March-April pull that means every row comes
+                # from before 15 April - which is exactly when rabi stubble burning
+                # starts - so the agricultural class vanishes from the seeded database
+                # even though the pipeline labelled 24,417 of them.
+                step = len(feats_pre) // args.limit + 1
+                feats_pre = feats_pre.iloc[::step].head(args.limit)
+                logger.info(
+                    "Sampled every %dth row across the full date range (%s to %s)",
+                    step, feats_pre["acq_date"].min(), feats_pre["acq_date"].max(),
+                )
+            detections = feats_pre
+            # Reuse the cached Overpass result so Facility Monitoring is populated
+            # with the same infrastructure the classifier actually measured against.
+            try:
+                import importlib.util
+                spec = importlib.util.spec_from_file_location(
+                    "bd", str(ROOT / "scripts" / "build_dataset.py")
+                )
+                bd = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(bd)
+                facilities = bd.fetch_osm((68.0, 18.0, 88.0, 33.0), pause_s=0.0)
+            except Exception as exc:
+                logger.warning("Could not load OSM facilities (%s)", str(exc)[:80])
+                facilities = []
+        else:
+            detections = simulate_detections()
+            if args.limit:
+                detections = detections.head(args.limit)
+            facilities = build_facility_registry()
 
         # --- facilities ---
         existing_names = {f.name for f in db.query(IndustrialFacility).all()}
@@ -87,18 +151,26 @@ def main() -> None:
                 id=uuid.uuid4(),
                 name=f["name"],
                 facility_type=f["category"],
-                osm_id=f"demo_{abs(hash(f['name'])) % 10**9}",
+                # Keyed on position, not name. osm_id is UNIQUE, and a huge share of
+                # real OSM industrial features carry no name at all - hashing the name
+                # collapsed every "unnamed" facility in the country onto one id and the
+                # insert failed on the unique constraint.
+                osm_id=f"osm_{f['latitude']:.6f}_{f['longitude']:.6f}_{f['category']}",
                 location=f"POINT({f['longitude']} {f['latitude']})",
-                source="DEMO_REGISTRY",
-                metadata_={"category": f["category"], "provenance": "offline simulation registry"},
+                source=f.get("source", "OSM_OVERPASS"),
+                metadata_={"category": f["category"], "provenance": "OSM Overpass"},
             ))
             added_fac += 1
         db.commit()
         logger.info("Inserted %d facilities", added_fac)
 
         # --- features + classification over the whole archive at once ---
-        logger.info("Engineering features over %d detections...", len(detections))
-        feats = build_feature_frame(detections, facilities=facilities)
+        if args.from_processed:
+            feats = detections          # already engineered upstream
+            logger.info("Using %d pre-engineered rows", len(feats))
+        else:
+            logger.info("Engineering features over %d detections...", len(detections))
+            feats = build_feature_frame(detections, facilities=facilities)
 
         bundle = joblib.load(ROOT / "ml" / "artifacts" / "thermal_classifier.joblib")
         logger.info("Classifying...")
@@ -110,13 +182,12 @@ def main() -> None:
         for i, (_, row) in enumerate(feats.iterrows()):
             s = scores[i]
             acq = datetime.date.fromisoformat(str(row["acq_date"]))
-            t_raw = str(row.get("acq_time", "0000")).zfill(4)
-            acq_t = datetime.time(int(t_raw[:2]) % 24, int(t_raw[2:]) % 60)
+            acq_t = _parse_acq_time(row.get("acq_time"))
 
             hs_id = uuid.uuid4()
             db.add(Hotspot(
                 id=hs_id,
-                event_id=f"sim_{i}_{acq.isoformat()}_{t_raw}",
+                event_id=str(row.get("event_id") or f"det_{i}_{acq.isoformat()}_{acq_t.strftime('%H%M')}"),
                 latitude=float(row["latitude"]),
                 longitude=float(row["longitude"]),
                 geom=f"POINT({row['longitude']} {row['latitude']})",
@@ -131,7 +202,7 @@ def main() -> None:
                 acq_time=acq_t,
                 daynight=str(row.get("daynight", "D"))[:1],
                 source="OFFLINE_SIMULATION",
-                raw_data={"site_name": row.get("site_name"), "provenance": "simulated"},
+                raw_data={"site_name": row.get("site_name", ""), "provenance": "simulated"},
             ))
 
             pred_id = uuid.uuid4()

@@ -1,0 +1,343 @@
+{
+  "model_name": "AgniNetra-ThermalClassifier",
+  "version": "2.0.0",
+  "algorithm": "random_forest",
+  "trained_utc": "2026-09-11T09:40:04.297528+00:00",
+  "data_provenance": "NASA FIRMS VIIRS_SNPP_SP bbox=68,18,88,33 start=2026-03-05 days=50; OSM Overpass infrastructure + land cover",
+  "label_source": "programmatic weak supervision (ml.labeling.weak_labels)",
+  "classes": [
+    "persistent_industrial_source",
+    "accidental_industrial_fire",
+    "forest_or_natural_fire",
+    "agricultural_burning",
+    "mining_or_other"
+  ],
+  "n_features": 32,
+  "features": [
+    "bright_ti4",
+    "bright_ti5",
+    "brightness_delta",
+    "frp",
+    "confidence",
+    "is_nighttime",
+    "day_of_year",
+    "persistence_ratio",
+    "site_n_detections",
+    "site_n_days",
+    "site_lifetime_days",
+    "site_frp_median",
+    "site_frp_std",
+    "site_frp_sigma_robust",
+    "site_frp_cv",
+    "centroid_drift_km",
+    "cluster_size",
+    "cluster_spread_km",
+    "site_night_fraction",
+    "frp_to_site_baseline",
+    "frp_zscore_at_site",
+    "dist_industrial_km",
+    "dist_mine_km",
+    "dist_landfill_km",
+    "site_dist_industrial_km",
+    "site_dist_mine_km",
+    "site_dist_landfill_km",
+    "count_industrial_5km",
+    "count_mine_5km",
+    "count_landfill_5km",
+    "is_inside_industrial",
+    "land_cover_class"
+  ],
+  "label_coverage": {
+    "total_detections": 207810,
+    "labelled": 83245,
+    "unlabelled_excluded": 124565,
+    "coverage": 0.4006,
+    "class_counts": {
+      "forest_or_natural_fire": 50113,
+      "agricultural_burning": 24417,
+      "persistent_industrial_source": 5104,
+      "mining_or_other": 3611
+    },
+    "mean_label_confidence": 0.9994
+  },
+  "n_train_rows": 61896,
+  "n_train_sites": 38264,
+  "n_holdout_rows": 21349,
+  "holdout_from_date": "2026-04-21",
+  "validation_strategy": "Spatial GroupKFold on DBSCAN site_id for model selection; chronological 20% holdout for the reported score. Model selected on CV, never on the holdout.",
+  "algorithm_comparison": {
+    "random_forest": {
+      "spatial_cv_macro_f1_mean": 0.9998,
+      "spatial_cv_macro_f1_std": 0.0001,
+      "spatial_cv_folds": [
+        0.9998,
+        0.9997,
+        1.0,
+        0.9998,
+        0.9997
+      ],
+      "temporal_holdout_macro_f1": 0.9996
+    },
+    "hist_gradient_boosting": {
+      "spatial_cv_macro_f1_mean": 0.9994,
+      "spatial_cv_macro_f1_std": 0.0003,
+      "spatial_cv_folds": [
+        0.9991,
+        0.9994,
+        0.9999,
+        0.9994,
+        0.9994
+      ],
+      "temporal_holdout_macro_f1": 0.9984
+    },
+    "logistic_regression": {
+      "spatial_cv_macro_f1_mean": 0.9036,
+      "spatial_cv_macro_f1_std": 0.0334,
+      "spatial_cv_folds": [
+        0.9432,
+        0.9386,
+        0.8637,
+        0.9038,
+        0.8689
+      ],
+      "temporal_holdout_macro_f1": 0.8867
+    }
+  },
+  "deliverable_i_segregation": {
+    "axis": "INDUSTRIAL vs NATURAL vs AGRICULTURAL",
+    "macro_f1": 0.9997,
+    "accuracy": 1.0,
+    "per_class": {
+      "AGRICULTURAL": {
+        "precision": 0.9999,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 11205.0
+      },
+      "INDUSTRIAL": {
+        "precision": 1.0,
+        "recall": 0.9984,
+        "f1-score": 0.9992,
+        "support": 642.0
+      },
+      "NATURAL": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 9502.0
+      },
+      "macro avg": {
+        "precision": 1.0,
+        "recall": 0.9995,
+        "f1-score": 0.9997,
+        "support": 21349.0
+      },
+      "weighted avg": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 21349.0
+      }
+    },
+    "confusion_matrix": {
+      "labels": [
+        "AGRICULTURAL",
+        "INDUSTRIAL",
+        "NATURAL"
+      ],
+      "matrix": [
+        [
+          11205,
+          0,
+          0
+        ],
+        [
+          1,
+          641,
+          0
+        ],
+        [
+          0,
+          0,
+          9502
+        ]
+      ]
+    },
+    "industrial_vs_natural_binary": {
+      "n": 10144,
+      "accuracy": 0.9999,
+      "macro_f1": 0.6664
+    }
+  },
+  "firms_type_baseline": {
+    "n_compared": 83245,
+    "firms_type_distribution": {
+      "0 (presumed vegetation fire)": 76210,
+      "2 (other static land source)": 6874,
+      "3 (offshore)": 161
+    },
+    "our_class_distribution": {
+      "forest_or_natural_fire": 50113,
+      "agricultural_burning": 24417,
+      "persistent_industrial_source": 5104,
+      "mining_or_other": 3611
+    },
+    "distinct_categories": {
+      "firms": 3,
+      "agninetra": 4
+    },
+    "firms_type_0_vegetation_fire_resolved_by_us": {
+      "forest_or_natural_fire": 50048,
+      "agricultural_burning": 24411,
+      "mining_or_other": 981,
+      "persistent_industrial_source": 770
+    },
+    "industrial_detections_firms_called_vegetation": 1751,
+    "industrial_axis_agreement": 0.9781,
+    "interpretation": "FIRMS resolves this set into 3 coarse types, none of which separates routine flaring from an industrial accident. AgniNetra resolves the same detections into 4 operational classes. 1751 detections FIRMS files as 'presumed vegetation fire' are identified here as industrial or mining activity."
+  },
+  "selected_model_metrics": {
+    "temporal_holdout_macro_f1": 0.9996,
+    "temporal_holdout_macro_f1_all_classes": 0.9996,
+    "holdout_supported_classes": [
+      "agricultural_burning",
+      "forest_or_natural_fire",
+      "mining_or_other",
+      "persistent_industrial_source"
+    ],
+    "holdout_unsupported_but_predicted": [],
+    "abstain_rate": 0.0001,
+    "macro_f1_on_confident_subset": 0.9996,
+    "per_class": {
+      "agricultural_burning": {
+        "precision": 0.9999,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 11205.0
+      },
+      "forest_or_natural_fire": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 9502.0
+      },
+      "mining_or_other": {
+        "precision": 1.0,
+        "recall": 0.9967,
+        "f1-score": 0.9983,
+        "support": 299.0
+      },
+      "persistent_industrial_source": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 343.0
+      },
+      "macro avg": {
+        "precision": 1.0,
+        "recall": 0.9992,
+        "f1-score": 0.9996,
+        "support": 21349.0
+      },
+      "weighted avg": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 21349.0
+      }
+    },
+    "confusion_matrix": {
+      "labels": [
+        "agricultural_burning",
+        "forest_or_natural_fire",
+        "mining_or_other",
+        "persistent_industrial_source"
+      ],
+      "matrix": [
+        [
+          11205,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          9502,
+          0,
+          0
+        ],
+        [
+          1,
+          0,
+          298,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          343
+        ]
+      ]
+    }
+  },
+  "label_circularity_note": "The labelling functions key on dist_industrial_km, persistence_ratio, land_cover_class and is_nighttime, and those same features are given to the model. A near-perfect score on this setup therefore demonstrates that the model recovered the rules, NOT that it classifies real fires well. See feature_ablation for the score with those features withheld, which is the honest measure of independent signal.",
+  "feature_ablation": {
+    "algorithm": "random_forest",
+    "withheld_features": [
+      "dist_industrial_km",
+      "dist_mine_km",
+      "dist_landfill_km",
+      "persistence_ratio",
+      "land_cover_class",
+      "is_nighttime"
+    ],
+    "retained_features": [
+      "bright_ti4",
+      "bright_ti5",
+      "brightness_delta",
+      "frp",
+      "confidence",
+      "day_of_year",
+      "site_n_detections",
+      "site_n_days",
+      "site_lifetime_days",
+      "site_frp_median",
+      "site_frp_std",
+      "site_frp_sigma_robust",
+      "site_frp_cv",
+      "centroid_drift_km",
+      "cluster_size",
+      "cluster_spread_km",
+      "site_night_fraction",
+      "frp_to_site_baseline",
+      "frp_zscore_at_site",
+      "site_dist_industrial_km",
+      "site_dist_mine_km",
+      "site_dist_landfill_km",
+      "count_industrial_5km",
+      "count_mine_5km",
+      "count_landfill_5km",
+      "is_inside_industrial"
+    ],
+    "spatial_cv_macro_f1_all_features": 0.9998,
+    "spatial_cv_macro_f1_ablated": 0.9399,
+    "delta": 0.0599
+  },
+  "holdout_class_coverage": {
+    "classes_in_holdout": [
+      "agricultural_burning",
+      "forest_or_natural_fire",
+      "mining_or_other",
+      "persistent_industrial_source"
+    ],
+    "classes_missing_from_holdout": [],
+    "warning": "All trained classes present in holdout."
+  },
+  "known_limitations": [
+    "Labels are weak, not hand-verified. Reported metrics measure agreement with the labelling functions, and inherit any bias those rules carry.",
+    "A held-out set of manually verified sites is required before any claim of real-world accuracy.",
+    "Spectral indices (NDVI/NBR/dNBR) are excluded from the feature set unless Google Earth Engine is configured; they are never imputed.",
+    "burn_scar_within_30d requires a MODIS MCD64A1 join. Without it the highest-precision labelling function never fires."
+  ]
+}

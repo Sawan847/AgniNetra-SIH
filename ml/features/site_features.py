@@ -87,72 +87,93 @@ def compute_site_statistics(df: pd.DataFrame) -> pd.DataFrame:
             cluster_spread_km=[], site_night_fraction=[],
         )
 
+    # Fully vectorised. The original iterated df.groupby("site_id") in Python and
+    # ran several pandas operations inside each iteration. That is fine for the
+    # thousands of sites a demo produces and unusable at national scale: a 50-day
+    # archive pull over northern India yields ~107,000 sites, and the loop had not
+    # finished after twenty minutes. Every quantity below is a groupby aggregation
+    # or a transform, so cost scales with rows rather than with group count.
     work = df.copy()
     work["_date"] = pd.to_datetime(work["acq_date"])
+    work["_day"] = work["_date"].dt.normalize()
+    work["_frp"] = pd.to_numeric(work.get("frp"), errors="coerce")
 
-    stats: Dict[Any, Dict[str, float]] = {}
+    if "daynight" in work.columns:
+        work["_night"] = (
+            work["daynight"].astype(str).str.upper().str.startswith("N").astype(float)
+        )
+    else:
+        work["_night"] = pd.to_numeric(work.get("is_nighttime", 0.0), errors="coerce").fillna(0.0)
 
-    for site_id, grp in work.groupby("site_id"):
-        n_det = len(grp)
-        n_days = int(grp["_date"].dt.normalize().nunique())
-        span_days = int((grp["_date"].max() - grp["_date"].min()).days) + 1
+    g = work.groupby("site_id", sort=False)
 
-        # Persistence: distinct active days over observed span. A site seen once is
-        # 1/1 = 1.0 by that formula, which is wrong - a single sighting is no
-        # evidence of persistence at all. Require a real span before crediting it.
-        persistence = (n_days / span_days) if span_days > 1 else 0.0
+    agg = g.agg(
+        site_n_detections=("_date", "size"),
+        site_n_days=("_day", "nunique"),
+        _first=("_date", "min"),
+        _last=("_date", "max"),
+        site_frp_median=("_frp", "median"),
+        _frp_std=("_frp", lambda s: s.std(ddof=0)),
+        _frp_n=("_frp", "count"),
+        _clat=("latitude", "mean"),
+        _clon=("longitude", "mean"),
+        site_night_fraction=("_night", "mean"),
+    )
 
-        frp_vals = pd.to_numeric(grp.get("frp"), errors="coerce").dropna()
-        frp_median = float(frp_vals.median()) if len(frp_vals) else 0.0
-        frp_std = float(frp_vals.std(ddof=0)) if len(frp_vals) > 1 else 0.0
-        frp_cv = float(frp_std / frp_median) if frp_median > 0 else 0.0
+    agg["site_lifetime_days"] = (agg["_last"] - agg["_first"]).dt.days + 1
 
-        # Robust scale via median absolute deviation. The sample standard deviation
-        # is useless as an anomaly baseline here because the anomaly is inside the
-        # sample: a two-day refinery fire inflates the site's own sigma enough that
-        # the fire no longer clears a 4-sigma bar. MAD ignores the tail, so the
-        # baseline describes normal operation rather than normal-plus-incident.
-        # 1.4826 rescales MAD to be a consistent estimator of sigma for Gaussian data.
-        if len(frp_vals) > 2:
-            mad = float((frp_vals - frp_median).abs().median())
-            frp_sigma_robust = 1.4826 * mad
-        else:
-            frp_sigma_robust = frp_std
+    # A site seen once spans one day, and n_days / span would be 1.0 - which would
+    # make every one-off wildfire look as permanent as a gas flare. A single sighting
+    # is no evidence of persistence, so it scores zero.
+    agg["persistence_ratio"] = np.where(
+        agg["site_lifetime_days"] > 1,
+        agg["site_n_days"] / agg["site_lifetime_days"].replace(0, np.nan),
+        0.0,
+    )
 
-        lats = grp["latitude"].to_numpy(dtype=float)
-        lons = grp["longitude"].to_numpy(dtype=float)
-        c_lat, c_lon = float(lats.mean()), float(lons.mean())
-        dists = _haversine_to_point(lats, lons, c_lat, c_lon)
-        drift = float(dists.mean()) if len(dists) else 0.0
-        spread = float(dists.max()) if len(dists) else 0.0
+    agg["site_frp_median"] = agg["site_frp_median"].fillna(0.0)
+    agg["site_frp_std"] = agg["_frp_std"].fillna(0.0)
+    agg["site_frp_cv"] = np.where(
+        agg["site_frp_median"] > 0, agg["site_frp_std"] / agg["site_frp_median"], 0.0
+    )
 
-        if "daynight" in grp.columns:
-            night_frac = float(
-                grp["daynight"].astype(str).str.upper().str.startswith("N").mean()
-            )
-        else:
-            night_frac = float(grp.get("is_nighttime", pd.Series([0])).mean())
+    # Robust scale via median absolute deviation. The sample standard deviation is
+    # useless as an anomaly baseline here because the anomaly sits inside the sample:
+    # a two-day refinery fire inflates that site's own sigma enough that the fire no
+    # longer clears a 4-sigma bar and hides itself. MAD ignores the tail, so the
+    # baseline describes normal operation rather than normal-plus-incident. The
+    # 1.4826 factor rescales MAD to estimate sigma consistently for Gaussian data.
+    site_med = work["site_id"].map(agg["site_frp_median"])
+    work["_absdev"] = (work["_frp"] - site_med).abs()
+    mad = work.groupby("site_id", sort=False)["_absdev"].median()
+    agg["site_frp_sigma_robust"] = (1.4826 * mad).fillna(0.0)
+    # Too few points for a meaningful MAD - fall back to the plain deviation.
+    agg.loc[agg["_frp_n"] <= 2, "site_frp_sigma_robust"] = agg.loc[
+        agg["_frp_n"] <= 2, "site_frp_std"
+    ]
 
-        stats[site_id] = {
-            "persistence_ratio": round(persistence, 4),
-            "site_n_detections": float(n_det),
-            "site_n_days": float(n_days),
-            "site_lifetime_days": float(span_days),
-            "site_frp_median": round(frp_median, 3),
-            "site_frp_std": round(frp_std, 3),
-            "site_frp_sigma_robust": round(frp_sigma_robust, 3),
-            "site_frp_cv": round(frp_cv, 4),
-            "centroid_drift_km": round(drift, 4),
-            "cluster_size": float(n_det),
-            "cluster_spread_km": round(spread, 4),
-            "site_night_fraction": round(night_frac, 4),
-        }
+    # Centroid drift and spread: broadcast each site's centroid back to its rows,
+    # compute all distances in one vectorised pass, then aggregate.
+    work["_dist_c"] = _haversine_arrays(
+        work["latitude"].to_numpy(dtype=float),
+        work["longitude"].to_numpy(dtype=float),
+        work["site_id"].map(agg["_clat"]).to_numpy(dtype=float),
+        work["site_id"].map(agg["_clon"]).to_numpy(dtype=float),
+    )
+    dist_g = work.groupby("site_id", sort=False)["_dist_c"]
+    agg["centroid_drift_km"] = dist_g.mean()
+    agg["cluster_spread_km"] = dist_g.max()
+    agg["cluster_size"] = agg["site_n_detections"].astype(float)
 
-    stat_df = pd.DataFrame.from_dict(stats, orient="index")
+    stat_df = agg[[
+        "persistence_ratio", "site_n_detections", "site_n_days", "site_lifetime_days",
+        "site_frp_median", "site_frp_std", "site_frp_sigma_robust", "site_frp_cv",
+        "centroid_drift_km", "cluster_size", "cluster_spread_km", "site_night_fraction",
+    ]].astype(float).round(4)
     stat_df.index.name = "site_id"
 
-    merged = df.merge(stat_df, left_on="site_id", right_index=True, how="left")
-    return merged
+    logger.info("Computed statistics for %d sites (vectorised)", len(stat_df))
+    return df.merge(stat_df, left_on="site_id", right_index=True, how="left")
 
 
 def add_infrastructure_distances(
@@ -312,7 +333,13 @@ def assign_land_cover(
 
     # Only overwrite where the detection has no surface type yet, so a value from a
     # higher-quality source (a WorldCover raster, say) is never clobbered by OSM.
-    existing = pd.to_numeric(out["land_cover_class"], errors="coerce").fillna(0.0).to_numpy()
+    # copy=True: pandas can hand back a read-only view here, and writing into it
+    # raises "assignment destination is read-only".
+    existing = (
+        pd.to_numeric(out["land_cover_class"], errors="coerce")
+        .fillna(0.0)
+        .to_numpy(dtype=float, copy=True)
+    )
     assign = (dist_km <= max_km) & (existing == 0)
     existing[assign] = nearest[assign]
     out["land_cover_class"] = existing
@@ -404,6 +431,19 @@ def build_feature_frame(
         df["burn_scar_within_30d"] = 0
 
     return df
+
+
+def _haversine_arrays(
+    lat1: np.ndarray, lon1: np.ndarray, lat2: np.ndarray, lon2: np.ndarray
+) -> np.ndarray:
+    """Element-wise great-circle distance in km between two arrays of points."""
+    dlat = np.radians(lat2 - lat1)
+    dlon = np.radians(lon2 - lon1)
+    a = (
+        np.sin(dlat / 2.0) ** 2
+        + np.cos(np.radians(lat1)) * np.cos(np.radians(lat2)) * np.sin(dlon / 2.0) ** 2
+    )
+    return 2.0 * EARTH_RADIUS_KM * np.arcsin(np.sqrt(np.clip(a, 0.0, 1.0)))
 
 
 def _haversine_to_point(
